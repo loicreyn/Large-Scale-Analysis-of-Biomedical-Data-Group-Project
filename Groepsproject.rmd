@@ -12,6 +12,8 @@ install.packages('ggplot2')
 install.packages("imputeTS")
 install.packages("pheatmap")
 install.packages("tidyr")
+install.packages("gridExtra")
+
 ```
 
 ```{r}
@@ -25,6 +27,7 @@ library('dplyr')
 library('pheatmap')
 library('tidyr')
 library('RColorBrewer')
+library(gridExtra)
 ```
 Data preparation:
 
@@ -816,6 +819,7 @@ if (length(kruskal_only) > 0) {
 ```
 Visualisation of the comparison
 ```{r}
+
 # Filter the proteins that appear in only one subtype from the top 10 of ANOVA
 unique_proteins_anova <- top10_per_subtype_anova %>%
   group_by(Protein_ID) %>%
@@ -859,7 +863,7 @@ combined_data <- rbind(unique_proteins_anova, unique_proteins_kruskal)
 # Create a list of all unique proteins from both tests
 all_proteins <- unique(combined_data$Protein_ID)
 
-# Use a cheerful color palette (e.g., 'Set3' in RColorBrewer)
+# Color palette
 protein_colors <- setNames(colorRampPalette(brewer.pal(12, "Set3"))(length(all_proteins)), all_proteins)
 
 # Specific exception for certain proteins: enforce unique colors
@@ -894,7 +898,7 @@ ggplot(unique_proteins_kruskal, aes(x = Subtype, y = Abs_Difference, fill = Prot
     values = protein_colors
   ) +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))   
 
 ```
 
