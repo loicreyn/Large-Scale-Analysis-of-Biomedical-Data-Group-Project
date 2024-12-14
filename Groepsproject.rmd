@@ -1,0 +1,1132 @@
+---
+title: "GroupProject"
+output:document
+date:
+---
+
+
+```{r}
+# Install packages
+install.packages('skimr')
+install.packages('ggplot2')
+install.packages("imputeTS")
+install.packages("pheatmap")
+install.packages("tidyr")
+```
+
+```{r}
+# Load library
+library('imputeTS')
+library('skimr')
+library('readxl')
+library('dplyr')
+library('ggplot2')
+library('dplyr')
+library('pheatmap')
+library('tidyr')
+library('RColorBrewer')
+```
+Data preparation:
+
+Exploration of the datasets 
+```{r}
+
+# Load datasets
+abundances <- read_excel("abundances.xlsx") # Load the abundances dataset
+metadata <- read.csv("metadata.csv")       # Load the metadata dataset
+
+# Check the structure of the datasets
+str(abundances)  
+str(metadata)   
+
+# Summarize the datasets
+summary(abundances)  
+summary(metadata)    
+
+# Skim the datasets
+skim(abundances)  
+skim(metadata)    
+
+# Print a preview of the datasets
+head(abundances)  
+head(metadata)    
+
+```
+Filtering of rows with missing values
+```{r} 
+
+# Replace string "NA" with actual NA values across all columns
+data <- abundances %>%
+  mutate(across(everything(), ~ na_if(., "NA")))
+
+# Count the number of NAs in each row
+na_counts <- rowSums(is.na(data))
+
+# Define a threshold for filtering rows (e.g., 40% missing data is allowed)
+thresholds <- ncol(data) * 0.4
+
+# Identify rows with too many NAs (more than the threshold)
+rows_to_filter <- which(na_counts > thresholds)
+
+# Save the list of rows to be filtered out for reference
+filtered_out_rows <- data[rows_to_filter, ]
+
+# Print the rows that will be removed
+cat("Rows to be filtered out due to excessive missing values:\n")
+print(filtered_out_rows)
+
+# Filter rows with missing values exceeding the threshold
+abundances_NArowsFiltered <- data %>%
+  filter(na_counts <= thresholds)
+
+# Compare row counts before and after filtering
+cat("Number of rows before filtering:", nrow(data), "\n")
+cat("Number of rows after filtering:", nrow(abundances_NArowsFiltered), "\n")
+
+```
+Residual removal of missing values: Change NA to the lowest value of that row
+```{r}
+
+# Convert all columns (except the first three) to numeric
+abundances_NArowsFiltered <- abundances_NArowsFiltered %>%
+  mutate(across(-(1:3), as.numeric))
+
+# Replace NAs with the minimum value in each row (excluding the first three columns)
+# Use rowwise() to calculate the minimum for each row and replace NAs
+abundance_FilteringDone <- abundances_NArowsFiltered %>%
+  rowwise() %>%
+  mutate(across(-(1:3), ~ ifelse(is.na(.), min(c_across(-(1:3)), na.rm = TRUE), .))) %>%
+  ungroup()
+
+# Check if any NAs are left in the dataset
+if (any(is.na(abundance_FilteringDone))) {
+  cat("There are still NAs left in the dataset.\n")
+} else {
+  cat("There are no NAs left in the dataset.\n")
+}
+
+# Count remaining NAs (if any)
+na_count <- sum(is.na(abundance_FilteringDone))
+cat("Total NAs remaining in the dataset:", na_count, "\n")
+
+# Identify rows with NAs
+rows_with_na <- which(apply(abundance_FilteringDone, 1, function(x) any(is.na(x))))
+
+# View rows with NAs (if any exist)
+if (length(rows_with_na) > 0) {
+  cat("Rows with NAs:\n", paste(rows_with_na, collapse = ", "), "\n")
+  print(abundance_FilteringDone[rows_with_na, ])  # Print rows containing NAs
+} else {
+  cat("No rows with NAs found.\n")
+}
+
+# Preview the updated dataset
+head(abundance_FilteringDone)
+
+```
+Removal of excessive columns + changing column names
+```{r}
+# Remove unnecessary columns ("Symbol", "Protein.names") from the dataset
+abundance_FilteringDone_clean <- abundance_FilteringDone %>%
+  select(-c(Symbol, Protein.names))
+
+# Rename the first column to "Protein.ID"
+colnames(abundance_FilteringDone_clean)[1] <- "Protein.ID"
+
+# Remove non-tumor tissue columns (columns ending with "P")
+# Identify and exclude columns with names ending in "P"
+abundance_FilteringDone_clean <- abundance_FilteringDone_clean %>%
+  select(-matches("P$"))
+
+# 4. Remove the "T" suffix from remaining column names (tumor samples)
+colnames(abundance_FilteringDone_clean) <- gsub("T$", "", colnames(abundance_FilteringDone_clean))
+
+# 5. Preview the modified dataset
+cat("Updated column names in the cleaned dataset:\n")
+print(colnames(abundance_FilteringDone_clean))
+head(abundance_FilteringDone_clean)
+
+```
+Log transformation
+```{r}
+# Extract only the abundance data (exclude the first column "Protein.ID")
+abundance_only <- as.numeric(unlist(abundance_FilteringDone_clean[, -1]))
+
+# 2. Apply a log transformation (log1p: log(1 + x)) to the abundance data
+log_abundance_only <- log1p(abundance_only)
+
+# 3. Preview the transformed data
+head(log_abundance_only)
+
+```
+Histogram, Q-Q Plot & Density plot: check for normality post log transformation
+```{r}
+# Custom color palette
+custom_colors <- c("pink", "lightblue", "lavender", "lightgreen", "lightcoral", 
+                   "lightyellow", "skyblue", "plum", "peachpuff", "thistle")
+
+# Histogram of log-transformed abundance data
+ggplot(data.frame(Abundance = log_abundance_only), aes(x = Abundance)) +
+  geom_histogram(binwidth = 0.5, fill = custom_colors[1], color = "white", alpha = 0.7) +  
+  labs(title = "Histogram of Log-Transformed Proteomic Abundance",
+       x = "Log-Transformed Abundance",
+       y = "Frequency") +
+  theme_minimal(base_size = 14) +  
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),  
+    axis.title = element_text(face = "bold")  
+  )
+
+# Q-Q Plot of log transformed abundance data
+qqnorm(log_abundance_only)
+qqline(log_abundance_only, col = "red", lwd = 2) 
+
+# Density plot of log transformed abundance data
+ggplot(data.frame(Abundance = log_abundance_only), aes(x = Abundance)) +
+  geom_density(fill = "pink", alpha = 0.5) +
+  labs(title = "Log-transformed Density Plot",
+       x = "Log-transformed Proteomic Abundance",
+       y = "Density") +
+  theme_minimal()
+
+```
+Standardisation
+```{r}
+# Standardize the log-transformed abundance data
+# The scale() function standardizes each column (subtracts the mean and divides by the standard deviation)
+stand_log_abundance_only <- scale(log_abundance_only)
+
+# View the first few rows of the standardized data
+head(stand_log_abundance_only)
+
+# Check if the standardization was performed correctly
+# The mean of each column should be approximately 0, and the standard deviation should be approximately 1
+
+# Calculate the mean of each column
+column_means <- apply(stand_log_abundance_only, 2, mean)  
+cat("Column Means (should be close to 0):\n")
+print(column_means)
+
+# Calculate the standard deviation of each column
+column_sds <- apply(stand_log_abundance_only, 2, sd)  
+cat("Column Standard Deviations (should be close to 1):\n")
+print(column_sds)
+
+```     
+Heatmap before and after standardisation
+```{r}
+# Remove the first column if it is non-numeric
+# We are assuming the first column is non-numeric (e.g., an identifier)
+abundance_FilteringDone_clean_numeric <- abundance_FilteringDone_clean[, -1]
+
+# Check the structure of the dataset to confirm it contains only numeric values
+str(abundance_FilteringDone_clean_numeric)
+
+# Convert the numeric dataset to a matrix
+abundance_FilteringDone_clean_matrix <- matrix(
+  as.numeric(as.matrix(abundance_FilteringDone_clean_numeric)),  # Ensure the data is numeric
+  nrow = nrow(abundance_FilteringDone_clean_numeric),
+  ncol = ncol(abundance_FilteringDone_clean_numeric)
+)
+
+# Optionally convert the matrix to a data frame for further processing
+abundance_FilteringDone_clean_df <- as.data.frame(abundance_FilteringDone_clean_matrix)
+
+# Check the structure of the cleaned dataset
+str(abundance_FilteringDone_clean_df)
+
+# Convert the standardized vector into a matrix (826 rows, 102 columns)
+stand_log_abundance_only_matrix <- matrix(stand_log_abundance_only, nrow = 826, ncol = 102)
+
+# Optionally convert the standardized matrix into a data frame
+stand_log_abundance_only_df <- as.data.frame(stand_log_abundance_only_matrix)
+
+# Check the structure of the standardized dataset
+str(stand_log_abundance_only_df)
+
+# Scale the data by row to ensure each row has a mean of 0 and standard deviation of 1
+abundance_FilteringDone_clean_scaled <- t(scale(t(abundance_FilteringDone_clean_df)))  # Row-wise scaling
+stand_log_abundance_only_scaled <- t(scale(t(stand_log_abundance_only_df)))  # Row-wise scaling for standardized data
+
+# Load the required library for heatmap visualization
+library(pheatmap)
+
+# Create a heatmap for the original data (before log transformation and standardization)
+pheatmap(abundance_FilteringDone_clean_scaled,
+         main = "Heatmap (Before Log Transformation and Standardisation)",
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         scale = "none",  # No further scaling, since the data is already scaled row-wise
+         show_rownames = FALSE,
+         show_colnames = FALSE)
+
+# Create a heatmap for the standardized data (after log transformation and standardization)
+pheatmap(stand_log_abundance_only_scaled,
+         main = "Heatmap (After Log Transformation and Standardisation)",
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         scale = "none",  # Data is already standardized
+         show_rownames = FALSE,
+         show_colnames = FALSE)
+
+```
+Transpose the abundance dataset
+```{r}
+# Check the structure of the original dataset
+dim(abundance_FilteringDone_clean)  # Displays the number of rows and columns
+
+# Convert log-transformed data back to a matrix (excluding metadata columns)
+all_abundances_log_matrix <- matrix(
+  stand_log_abundance_only,  # Log-transformed data vector
+  nrow = nrow(abundance_FilteringDone_clean),  # Number of rows in the original dataset
+  ncol = ncol(abundance_FilteringDone_clean) - 1  # Exclude metadata column (e.g., Protein names)
+)
+
+# Assign row and column names to the matrix
+rownames(all_abundances_log_matrix) <- rownames(abundance_FilteringDone_clean)
+colnames(all_abundances_log_matrix) <- colnames(abundance_FilteringDone_clean)[-1]  # Exclude metadata columns
+
+# Verify the new structure
+print(dim(all_abundances_log_matrix))
+print(head(all_abundances_log_matrix))
+
+# Transpose the matrix
+abundance_data_transposed <- t(all_abundances_log_matrix)
+
+# Convert the transposed matrix to a data frame
+abundance_data_transposed_df <- as.data.frame(abundance_data_transposed)
+
+# Add original row names as column names (Protein IDs)
+colnames(abundance_data_transposed_df) <- rownames(all_abundances_log_matrix)
+rownames(abundance_data_transposed_df) <- colnames(all_abundances_log_matrix)
+
+# Add Protein IDs as column names and Sample IDs as row names
+protein_ID <- abundance_FilteringDone_clean$Protein.ID  # Extract Protein IDs
+colnames(abundance_data_transposed_df) <- protein_ID  # Set Protein IDs as column names
+
+# Add an 'ID' column for the row names and rearrange
+abundance_data_transposed_df$ID <- rownames(abundance_data_transposed_df)
+
+# Move the 'ID' column to the first position
+abundance_data_transposed_df <- abundance_data_transposed_df[, c("ID", setdiff(names(abundance_data_transposed_df), "ID"))]
+
+# Remove original row names as they are now in the 'ID' column
+rownames(abundance_data_transposed_df) <- NULL
+
+# View the final transposed dataset with Protein IDs as column names and Sample IDs as row names
+print("Transposed abundance dataset with Protein IDs as column names:")
+head(abundance_data_transposed_df)
+
+```
+Merge the abundance dataset with the metadata dataset
+```{r}
+# Check column names in both datasets to ensure they have a common "ID" column
+print("Metadata column names:")
+print(colnames(metadata))
+
+print("Abundance data column names:")
+print(colnames(abundance_data_transposed_df))
+
+# Merge the datasets by the "ID" column (Ensure all records are included from both datasets)
+merged_data <- merge(metadata, abundance_data_transposed_df, by = "ID", all = TRUE)
+
+# Preview the merged dataset
+print("Merged dataset preview:")
+head(merged_data)
+
+# Save the merged dataset to a CSV file
+write.csv(merged_data, "merged_data.csv", row.names = FALSE)
+
+```
+First hypothesis: What are the proteomic differences among HCC subtypes?
+
+Anova test
+```{r}
+# Prepare a dataframe to store ANOVA results
+results_anova <- data.frame(
+  Protein_ID = colnames(merged_data)[22:ncol(merged_data)],  # Get protein names from columns 22 onwards
+  P_Value = NA,  # Placeholder for p-values
+  stringsAsFactors = FALSE
+)
+
+# Loop through each protein column and run the ANOVA test
+for (i in 22:ncol(merged_data)) {  
+  model <- aov(merged_data[, i] ~ merged_data$Proteomic_Subtype)  # Run ANOVA for each protein
+  results_anova$P_Value[i - 21] <- summary(model)[[1]][["Pr(>F)"]][1]  # Extract p-value
+}
+
+# Apply Bonferroni correction to p-values
+results_anova$Adj_P_Value_Bonferroni <- p.adjust(results_anova$P_Value, method = "bonferroni")
+
+# Select significant proteins (p-value < 0.05 after Bonferroni correction)
+significant_proteins_anova <- subset(results_anova, Adj_P_Value_Bonferroni < 0.05)
+
+# Get the list of significant protein IDs
+significant_proteins_list_anova <- significant_proteins_anova$Protein_ID
+
+# Output the list of significant proteins and the count
+cat("Significant proteins after Bonferroni correction:\n")
+print(significant_proteins_list_anova)
+
+# Count the number of significant proteins
+aantal_significante_eiwitten <- nrow(significant_proteins_anova)
+
+# Print the number of significant proteins
+cat("Number of significant proteins after Bonferroni correction:", aantal_significante_eiwitten, "\n")
+
+```
+Tukey HSD post-hoc test
+```{r}
+# Dataframe to store results of post-hoc analyses
+post_hoc_results <- data.frame(Protein_ID = character(),
+                               Group_Comparison = character(), 
+                               P_Value = numeric(),
+                               Adj_P_Value = numeric(),
+                               Lower_CI = numeric(),
+                               Upper_CI = numeric(),
+                               stringsAsFactors = FALSE)
+
+# Loop through only significant proteins from the ANOVA test
+for (protein in significant_proteins_list_anova) {
+  
+  # Find the index of the protein in the dataset
+  protein_index <- which(colnames(merged_data) == protein)
+  
+  # Perform the ANOVA model for the protein
+  model <- aov(merged_data[, protein_index] ~ merged_data$Proteomic_Subtype)
+  
+  # Perform Tukey's HSD post-hoc test to compare the subtypes
+  tukey_result <- TukeyHSD(model)
+  
+  # Extract results from Tukey's test
+  comparisons <- rownames(tukey_result$`merged_data$Proteomic_Subtype`)
+  p_values <- tukey_result$`merged_data$Proteomic_Subtype`[, "p adj"]
+  lower_ci <- tukey_result$`merged_data$Proteomic_Subtype`[, "lwr"]
+  upper_ci <- tukey_result$`merged_data$Proteomic_Subtype`[, "upr"]
+  
+  # Add the results to the results dataframe
+  for (i in 1:length(comparisons)) {
+    post_hoc_results <- rbind(post_hoc_results, 
+                              data.frame(Protein_ID = protein,
+                                         Group_Comparison = comparisons[i],
+                                         P_Value = p_values[i],
+                                         Adj_P_Value = p.adjust(p_values[i], method = "bonferroni"), # Bonferroni correction for multiple tests
+                                         Lower_CI = lower_ci[i],
+                                         Upper_CI = upper_ci[i],
+                                         stringsAsFactors = FALSE))
+  }
+}
+
+# Select significant results (e.g., adjusted p-value < 0.05) and ensure confidence intervals do not include 0
+significant_post_hoc_results <- post_hoc_results %>%
+  filter(Adj_P_Value < 0.05 & !(Lower_CI <= 0 & Upper_CI >= 0))
+
+# Overview of significant comparisons after Tukey's post-hoc test
+print(significant_post_hoc_results)
+
+```
+Select non-tumor tissue columns
+```{r}
+# Select non-tumor tissue columns by selecting columns that end with "P"
+abundances_P <- abundances %>%
+  select(ends_with("P"))
+
+# Remove the "P" suffix from column names
+colnames(abundances_P) <- sub("P$", "", colnames(abundances_P))
+
+# View the first few rows of the modified dataset
+head(abundances_P)
+
+# Check the updated column names to ensure "P" has been removed
+cat("Updated column names in non-tumor tissue data:\n")
+print(colnames(abundances_P))
+
+```
+Remove missing values in non-tumor tissue data
+```{r}
+
+# Convert character columns to numeric, if necessary
+abundances_P <- abundances_P %>%
+  mutate(across(where(is.character), ~ as.numeric(.)))
+
+# Replace NA values with the minimum value in each row
+abundances_P_Filtered <- abundances_P %>%
+  rowwise() %>%
+  mutate(across(everything(), ~ ifelse(is.na(.), min(c_across(everything()), na.rm = TRUE), .))) %>%
+  ungroup()
+
+# Check if there are any NAs left in the dataset
+na_count <- sum(is.na(abundances_P_Filtered))
+cat("There are", na_count, "NAs left in the dataset.\n")
+
+# Identify rows with any remaining NAs
+rows_with_na <- which(apply(abundances_P_Filtered, 1, function(x) any(is.na(x))))
+cat("Rows with NAs:", rows_with_na, "\n")
+
+# View the rows with NAs
+head(abundances_P_Filtered[rows_with_na, ])
+```
+Log transformation on non-tumor tissue data
+```{r}
+# Transform the data using log1p
+abundances_P_Filtered_log <- log1p(abundances_P_Filtered)
+```
+Standardisation on non-tumor tissue data
+```{r}
+# Standardize the log-transformed abundance data (mean = 0, sd = 1)
+abundances_P_stand <- scale(abundances_P_Filtered_log)
+
+# View the standardized data (first few rows)
+head(abundances_P_stand)
+
+# Check if the standardization was correctly performed by verifying the mean and standard deviation of each column
+column_means <- apply(abundances_P_stand, 2, mean)  # Mean of each column (should be close to 0)
+column_sds <- apply(abundances_P_stand, 2, sd)      # Standard deviation of each column (should be close to 1)
+
+# Print the results to check the mean and standard deviation
+cat("Means of each column (should be close to 0):\n")
+print(column_means)
+
+cat("Standard deviations of each column (should be close to 1):\n")
+print(column_sds)
+
+```
+Transpose non-tumor tissue dataset
+```{r}
+
+# Transpose the standardized non-tumor tissue data
+abundances_P_stand_transposed <- t(abundances_P_stand)
+
+# Convert the transposed matrix back into a data frame
+abundances_P_stand_transposed <- as.data.frame(abundances_P_stand_transposed)
+
+# Set the column names based on the Protein.ID from the original dataset
+colnames(abundances_P_stand_transposed) <- abundances$ID
+
+# View the first few rows of the transposed dataset
+head(abundances_P_stand_transposed)
+
+# Add row names as a new column 'ID' using rownames_to_column function
+abundances_P_stand_transposed <- abundances_P_stand_transposed %>%
+  tibble::rownames_to_column(var = "ID")  # Adding row names as 'ID' column
+
+# Move the 'ID' column to the first position (if necessary, to ensure correct order)
+abundances_P_stand_transposed <- abundances_P_stand_transposed[, c("ID", setdiff(names(abundances_P_stand_transposed), "ID"))]
+
+# Remove the row names (since they are now stored as a column)
+rownames(abundances_P_stand_transposed) <- NULL
+
+# View the result to ensure everything is correct
+head(abundances_P_stand_transposed)
+
+```
+Top 10 proteins (Anova)
+```{r}
+
+# Make a dataframe to store top 10 results per subtype
+top10_per_subtype_anova <- data.frame(
+  Subtype = character(),
+  Protein_ID = character(),
+  Mean_Tumor = numeric(),
+  Mean_Control = numeric(),
+  Abs_Difference = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each subtype in the dataset
+for (subtype in unique(merged_data$Proteomic_Subtype)) {
+  
+  # Filter tumor samples for the current subtype
+  tumor_data <- merged_data[merged_data$Proteomic_Subtype == subtype, ]
+  
+  # Extract control samples for the same proteins from the control dataset
+  control_data <- abundances_P_stand_transposed[, colnames(tumor_data[, 22:ncol(merged_data)])]
+  
+  # Iterate through significant proteins identified in post-hoc analysis
+  significant_proteins <- unique(significant_post_hoc_results$Protein_ID)
+  
+  # Ensure only proteins available in tumor_data are analyzed
+  available_proteins <- intersect(significant_proteins, colnames(tumor_data))
+  
+  # Process each protein
+  for (protein in available_proteins) {
+    # Calculate the mean abundance for tumor samples
+    tumor_mean <- mean(tumor_data[[protein]], na.rm = TRUE)
+    
+    # Calculate the mean abundance for control samples
+    control_mean <- mean(control_data[[protein]], na.rm = TRUE)
+    
+    # Calculate the absolute difference
+    abs_difference <- abs(tumor_mean - control_mean)
+    
+    # Append the results to the dataframe
+    top10_per_subtype_anova <- rbind(
+      top10_per_subtype_anova,
+      data.frame(
+        Subtype = subtype,
+        Protein_ID = protein,
+        Mean_Tumor = tumor_mean,
+        Mean_Control = control_mean,
+        Abs_Difference = abs_difference,
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+}
+
+# Select the top 10 proteins per subtype based on the absolute difference
+top10_per_subtype_anova <- top10_per_subtype_anova %>%
+  group_by(Subtype) %>%
+  arrange(Subtype, desc(Abs_Difference)) %>%  # Sort by descending Abs_Difference within each Subtype
+  slice_head(n = 10) %>%  # Retain the top 10 rows per Subtype
+  ungroup()  # Remove grouping
+
+# Display the final result
+print(top10_per_subtype_anova)
+
+```
+Visualisation top 10 proteins (Anova)
+```{r}
+
+# Visualisation of the top 10 proteins per subtype with the largest difference in abundance
+ggplot(top10_per_subtype_anova, aes(x = reorder(Protein_ID, -Abs_Difference), y = Abs_Difference, fill = Subtype)) +
+  geom_bar(stat = "identity", position = "dodge") +  
+  labs(title = "Top 10 Proteins per Subtype (ANOVA)", 
+       x = "Protein ID", 
+       y = "Difference in Abundance (Tumor vs. Non-Tumor)") +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  
+        axis.text.y = element_text(size = 8),  
+        legend.position = "top", 
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +  
+  scale_fill_manual(values = custom_colors)  
+
+```
+Kruskal Wallis test
+```{r}
+
+# Create a dataframe to store results of the Kruskal-Wallis test
+results_kruskal <- data.frame(
+  Protein_ID = colnames(merged_data[, 22:ncol(merged_data)]),  # Extract protein column names
+  P_Value = NA,  # Placeholder for p-values
+  stringsAsFactors = FALSE
+)
+
+# Perform Kruskal-Wallis test for each protein and save the p-value
+for (i in 22:ncol(merged_data)) {  # Loop through protein columns starting from column 22
+  model <- kruskal.test(merged_data[, i] ~ merged_data$Proteomic_Subtype)  # Perform Kruskal-Wallis test
+  results_kruskal$P_Value[i - 21] <- model$p.value  # Save the p-value in the results dataframe
+}
+
+# Apply Bonferroni correction to adjust the p-values for multiple comparisons
+results_kruskal$Adj_P_Value_Bonferroni <- p.adjust(results_kruskal$P_Value, method = "bonferroni")
+
+# Select significant proteins (adjusted p-value < 0.05 after Bonferroni correction)
+significant_proteins_kruskal <- results_kruskal[results_kruskal$Adj_P_Value_Bonferroni < 0.05, ]
+
+# Extract the list of significant protein IDs
+significant_proteins_list_kruskal <- significant_proteins_kruskal$Protein_ID
+
+# Count the number of significant proteins
+num_significant_kruskal <- nrow(significant_proteins_kruskal)
+
+# Print the count of significant proteins
+cat("Number of significant proteins after Kruskal-Wallis test and Bonferroni correction:", num_significant_kruskal, "\n")
+
+# View the list of significant proteins 
+print(significant_proteins_list_kruskal)
+
+```
+Post hoc test: Dunn test
+```{r}
+# Load the necessary package for Dunn's test
+library(dunn.test)
+
+# Initialize a dataframe to store results from the Dunn's post-hoc test
+post_hoc_kruskal_results <- data.frame(
+  Protein_ID = character(),       # Protein identifier
+  Group_Comparison = character(), # Pairwise group comparisons
+  P_Value = numeric(),            # Adjusted p-value for each comparison
+  stringsAsFactors = FALSE
+)
+
+# Loop through each significant protein (from Kruskal-Wallis test) to perform Dunn's test
+for (protein in significant_proteins_list_kruskal) {
+  
+  # Run the Kruskal-Wallis test for the protein to confirm significance
+  model <- kruskal.test(merged_data[, protein] ~ merged_data$Proteomic_Subtype)
+  
+  # Perform Dunn's post-hoc test only if Kruskal-Wallis is significant (p < 0.05)
+  if (model$p.value < 0.05) {
+    
+    # Perform Dunn's test with Bonferroni adjustment
+    dunn_result <- dunn.test(
+      merged_data[, protein], 
+      merged_data$Proteomic_Subtype, 
+      method = "bonferroni"
+    )
+    
+    # Extract pairwise comparisons and adjusted p-values from the Dunn's test result
+    comparisons <- dunn_result$comparisons
+    p_values <- dunn_result$P.adjusted
+    
+    # Add the results for this protein to the results dataframe
+    for (i in 1:length(comparisons)) {
+      post_hoc_kruskal_results <- rbind(
+        post_hoc_kruskal_results, 
+        data.frame(
+          Protein_ID = protein,
+          Group_Comparison = comparisons[i],
+          P_Value = p_values[i],
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+  }
+}
+
+# Filter the results to include only significant pairwise comparisons (p < 0.05)
+significant_post_hoc_kruskal <- post_hoc_kruskal_results[
+  post_hoc_kruskal_results$P_Value < 0.05, 
+]
+
+# Display the significant pairwise comparisons from Dunn's post-hoc test
+print(significant_post_hoc_kruskal)
+
+```
+Top 10 eiwitten na Kruskal Wallis
+```{r}
+# Dataframe to store the top 10 results per subtype after Kruskal-Wallis and post-hoc tests
+top10_per_subtype_kruskal <- data.frame(
+  Subtype = character(),       # Subtype name
+  Protein_ID = character(),    # Protein ID
+  Mean_Tumor = numeric(),      # Mean abundance in tumor samples
+  Mean_Control = numeric(),    # Mean abundance in control samples
+  Abs_Difference = numeric(),  # Absolute difference between tumor and control
+  stringsAsFactors = FALSE
+)
+
+# Loop through each subtype in the dataset
+for (subtype in unique(merged_data$Proteomic_Subtype)) {
+  
+  # Filter tumor samples for the current subtype
+  tumor_data <- merged_data[merged_data$Proteomic_Subtype == subtype, ]
+  
+  # Match the columns of control data to those of tumor data (adjust for protein columns)
+  control_data <- abundances_P_stand_transposed[, colnames(tumor_data[, 22:ncol(merged_data)])]
+  
+  # Iterate over significant proteins from Dunn's post-hoc test
+  for (protein in unique(significant_post_hoc_kruskal$Protein_ID)) {
+    
+    # Ensure the protein exists in the current subtype's data
+    if (protein %in% colnames(tumor_data)) {
+      
+      # Calculate the mean abundance for tumor samples
+      tumor_mean <- mean(tumor_data[, protein], na.rm = TRUE)
+      
+      # Calculate the mean abundance for control samples
+      control_mean <- mean(control_data[, protein], na.rm = TRUE)
+      
+      # Calculate the absolute difference between tumor and control means
+      abs_difference <- abs(tumor_mean - control_mean)
+      
+      # Append the results to the output dataframe
+      top10_per_subtype_kruskal <- rbind(
+        top10_per_subtype_kruskal, 
+        data.frame(
+          Subtype = subtype,
+          Protein_ID = protein,
+          Mean_Tumor = tumor_mean,
+          Mean_Control = control_mean,
+          Abs_Difference = abs_difference,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+  }
+}
+
+# Filter and sort the results to select the top 10 proteins per subtype
+library(dplyr)
+top10_per_subtype_kruskal <- top10_per_subtype_kruskal %>%
+  group_by(Subtype) %>%                   # Group by subtype
+  arrange(Subtype, desc(Abs_Difference)) %>% # Sort by absolute difference (descending)
+  slice_head(n = 10) %>%                  # Select top 10 proteins for each subtype
+  ungroup()                               # Remove grouping for clean output
+
+# Display the results
+print(top10_per_subtype_kruskal)
+
+```
+Visualisation na Kruskal Wallis
+```{r}
+# Visualisation of the top 10 proteins per subtype from Kruskal-Wallis results
+ggplot(top10_per_subtype_kruskal, aes(x = reorder(Protein_ID, -Abs_Difference), y = Abs_Difference, fill = Subtype)) +
+  geom_bar(stat = "identity", position = "dodge") +  
+  labs(title = "Top 10 proteins per Subtype (Kruskal-Wallis)",
+       x = "Protein ID",
+       y = "Difference in Abundance (Tumor vs. Non-Tumor)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  
+        axis.text.y = element_text(size = 8),  
+        legend.position = "top",  
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +  
+  scale_fill_manual(values = custom_colors)  
+
+```
+Comparison Anova vs Kruskal Wallis
+```{r}
+# Extract Protein_IDs and corresponding ranks from ANOVA and Kruskal-Wallis
+anova_proteins <- unique(top10_per_subtype_anova$Protein_ID)  # Proteins from ANOVA
+kruskal_proteins <- unique(top10_per_subtype_kruskal$Protein_ID)  # Proteins from Kruskal-Wallis
+
+# Create a comparison dataframe with all proteins
+comparison_full <- data.frame(
+  Protein_ID = union(anova_proteins, kruskal_proteins),  # Include all proteins from both tests
+  ANOVA_Rank = match(union(anova_proteins, kruskal_proteins), anova_proteins),
+  Kruskal_Wallis_Rank = match(union(anova_proteins, kruskal_proteins), kruskal_proteins)
+)
+
+# Add a column to indicate proteins common to both tests
+comparison_full$Matched <- ifelse(!is.na(comparison_full$ANOVA_Rank) & !is.na(comparison_full$Kruskal_Wallis_Rank), "Yes", "No")
+
+# Sort the dataframe for clarity
+comparison_full <- comparison_full[order(comparison_full$Matched, comparison_full$ANOVA_Rank, comparison_full$Kruskal_Wallis_Rank), ]
+
+# Print the comparison
+cat("Comparison of Proteins from ANOVA and Kruskal-Wallis:\n")
+print(comparison_full)
+
+# Output proteins unique to ANOVA or Kruskal-Wallis
+anova_only <- comparison_full[is.na(comparison_full$Kruskal_Wallis_Rank), "Protein_ID"]
+kruskal_only <- comparison_full[is.na(comparison_full$ANOVA_Rank), "Protein_ID"]
+
+if (length(anova_only) > 0) {
+  cat("\nProteins found only in ANOVA results:\n")
+  print(anova_only)
+}
+
+if (length(kruskal_only) > 0) {
+  cat("\nProteins found only in Kruskal-Wallis results:\n")
+  print(kruskal_only)
+}
+
+```
+Visualisation of the comparison
+```{r}
+# Filter the proteins that appear in only one subtype from the top 10 of ANOVA
+unique_proteins_anova <- top10_per_subtype_anova %>%
+  group_by(Protein_ID) %>%
+  summarise(Count = n(), Subtypes = paste(unique(Subtype), collapse = ", ")) %>%
+  filter(Count == 1)  # Select proteins that are unique to one subtype
+
+# Add subtype information
+unique_proteins_anova <- top10_per_subtype_anova %>%
+  filter(Protein_ID %in% unique_proteins_anova$Protein_ID)
+
+# Filter the proteins that appear in only one subtype from the top 10 of Kruskal-Wallis
+unique_proteins_kruskal <- top10_per_subtype_kruskal %>%
+  group_by(Protein_ID) %>%
+  summarise(Count = n(), Subtypes = paste(unique(Subtype), collapse = ", ")) %>%
+  filter(Count == 1)  # Select proteins that are unique to one subtype
+
+# Add subtype information
+unique_proteins_kruskal <- top10_per_subtype_kruskal %>%
+  filter(Protein_ID %in% unique_proteins_kruskal$Protein_ID)
+
+# Combine the results into one overview
+unique_proteins_combined <- list(
+  ANOVA_Unique = unique_proteins_anova,
+  Kruskal_Unique = unique_proteins_kruskal
+)
+
+# Print the results
+cat("\nProteins unique to one subtype in ANOVA top 10:\n")
+print(unique_proteins_combined$ANOVA_Unique)
+
+cat("\nProteins unique to one subtype in Kruskal-Wallis top 10:\n")
+print(unique_proteins_combined$Kruskal_Unique)
+
+# Add a column to indicate which test the data came from
+unique_proteins_anova$Source <- "ANOVA"
+unique_proteins_kruskal$Source <- "Kruskal-Wallis"
+
+# Combine the datasets for both tests (ANOVA and Kruskal-Wallis)
+combined_data <- rbind(unique_proteins_anova, unique_proteins_kruskal)
+
+# Create a list of all unique proteins from both tests
+all_proteins <- unique(combined_data$Protein_ID)
+
+# Use a cheerful color palette (e.g., 'Set3' in RColorBrewer)
+protein_colors <- setNames(colorRampPalette(brewer.pal(12, "Set3"))(length(all_proteins)), all_proteins)
+
+# Specific exception for certain proteins: enforce unique colors
+protein_colors["P05089"] <- "#FF6347"  # Tomato red for ANOVA
+protein_colors["P08319"] <- "#1E90FF"  # Dodger blue for Kruskal-Wallis
+
+# Visualization for ANOVA test
+ggplot(unique_proteins_anova, aes(x = Subtype, y = Abs_Difference, fill = Protein_ID)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Proteins per Subtype - ANOVA Test",
+    x = "Subtype",
+    y = "Abs. Difference in Mean Expression"
+  ) +
+  scale_fill_manual(
+    name = "Proteins",
+    values = protein_colors
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Visualization for Kruskal-Wallis test
+ggplot(unique_proteins_kruskal, aes(x = Subtype, y = Abs_Difference, fill = Protein_ID)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Proteins per Subtype - Kruskal-Wallis Test",
+    x = "Subtype",
+    y = "Abs. Difference in Mean Expression"
+  ) +
+  scale_fill_manual(
+    name = "Proteins",
+    values = protein_colors
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Second hypothesis: Is APF level a marker for tumor diameter?
+
+Metadata exploration
+```{r}
+# View the metadata
+metadata
+
+# Select only the relevant columns from the dataset (ID, AFP in ng/ml, and tumor diameter in cm)
+metadata_filtered <- merged_data %>% select(ID, AFP_.ng.ml., Diameter_of_tumor_.cm.)
+
+# Check the first few rows of the filtered data to ensure it contains the correct columns
+print(metadata_filtered)
+
+# View the structure of the filtered dataset to understand the data types and summary of the variables
+str(metadata_filtered)
+
+```
+Convert Diameter_of_tumor_.cm. to numeric
+```{r}
+
+# Create a copy of the original dataset so the original can be used later
+metadata_filtered_numeric <- metadata_filtered
+
+# Check the class of the 'Diameter_of_tumor_.cm.' column to ensure it is read as a character
+class(metadata_filtered_numeric$Diameter_of_tumor_.cm.)
+
+# Convert the 'Diameter_of_tumor_.cm.' column to numeric type for analysis
+metadata_filtered_numeric$Diameter_of_tumor_.cm. <- as.numeric(metadata_filtered_numeric$Diameter_of_tumor_.cm.)
+
+# Check again to confirm if the conversion to numeric was successful
+class(metadata_filtered_numeric$Diameter_of_tumor_.cm.)
+
+```
+Localise NAs
+```{r}
+# Check for NA values, which may have been introduced due to cases where there are two diameters recorded
+# View rows with NA values in the 'Diameter_of_tumor_.cm.' column
+na_rows <- metadata_filtered_numeric[is.na(metadata_filtered_numeric$Diameter_of_tumor_.cm.), ]
+
+# Display rows with NA values
+print(na_rows)
+
+```
+Split the 'Diameter_of_tumor_.cm.' column by the "+" sign and create new rows for each diameter
+```{r}
+# Split the 'Diameter_of_tumor_.cm.' column by the "+" sign and create new rows for each diameter
+merged_data_expanded <- metadata_filtered %>%
+  separate_rows(Diameter_of_tumor_.cm., sep = "\\+")
+
+# Check the result: view the first few rows to ensure the split worked correctly
+print(merged_data_expanded)
+
+# Convert the 'Diameter_of_tumor_.cm.' column to numeric after the split
+metadata_modified <- merged_data_expanded %>%
+  mutate(Diameter_of_tumor_.cm. = as.numeric(Diameter_of_tumor_.cm.))
+
+# Check the structure of the modified dataset to ensure the column is now numeric
+str(metadata_modified)  
+
+# Print the modified dataset to inspect the rows
+print(metadata_modified) 
+
+```
+Outlier detection
+```{r}
+# Log transformation for AFP (AFP should be positive for log transformation)
+metadata_modified$log_AFP <- log(metadata_modified$AFP_.ng.ml.)
+
+# Boxplot for AFP, log AFP and Tumor Diameter
+par(mfrow = c(1, 3))  # Set the layout to display three plots side by side
+
+# Boxplot for AFP (Alpha-fetoprotein) levels
+boxplot(metadata_modified$AFP_.ng.ml., 
+        main = "Boxplot of AFP Levels", 
+        ylab = "AFP (ng/ml)", 
+        col = "lightblue", 
+        border = "darkblue",  # Darker border for better contrast
+        notch = FALSE,        # Remove notch to avoid warning
+        horizontal = FALSE,   # Vertical boxplot for better readability
+        outline = TRUE)       # Include outliers
+
+# Boxplot for log(AFP)
+boxplot(metadata_modified$log_AFP, 
+        main = "Boxplot of log(AFP)", 
+        ylab = "log(AFP)", 
+        col = "lavender", 
+        border = "purple4",   # Darker border for better contrast
+        notch = FALSE,         # Remove notch to avoid warning
+        horizontal = FALSE,    # Vertical boxplot for better readability
+        outline = TRUE)        # Include outliers
+
+# Boxplot for Tumor Diameter 
+boxplot(metadata_modified$Diameter_of_tumor_.cm., 
+        main = "Boxplot of Tumor Diameter",
+        ylab = "Tumor Diameter (cm)", 
+        col = "lightpink",     # Change the fill color to pink
+        border = "darkred",    # Darker red border for contrast
+        notch = FALSE,         # Remove notch to avoid warning
+        horizontal = FALSE,    # Vertical boxplot for better readability
+        outline = TRUE)        # Include outliers
+
+# Function to calculate Z-scores and IQRs
+calculate_outliers <- function(data_column) {
+  z_scores <- scale(data_column)
+  iqr_value <- IQR(data_column)
+  Q1 <- quantile(data_column, 0.25)
+  Q3 <- quantile(data_column, 0.75)
+  lower <- Q1 - 1.5 * iqr_value
+  upper <- Q3 + 1.5 * iqr_value
+  
+  list(z_scores = z_scores, lower = lower, upper = upper, Q1 = Q1, Q3 = Q3)
+}
+
+# Apply the outlier detection for AFP, log(AFP), and Tumordiameter
+AFP_outliers <- calculate_outliers(metadata_modified$AFP_.ng.ml.)
+log_AFP_outliers <- calculate_outliers(metadata_modified$log_AFP)
+diameter_outliers <- calculate_outliers(metadata_modified$Diameter_of_tumor_.cm.)
+
+# Detect outliers using Z-scores (threshold > 3 or < -3)
+outliers_z_AFP <- which(abs(AFP_outliers$z_scores) > 3)
+outliers_z_log_AFP <- which(abs(log_AFP_outliers$z_scores) > 3)
+outliers_z_diameter <- which(abs(scale(metadata_modified$Diameter_of_tumor_.cm.)) > 3)
+
+# Detect outliers using IQR method
+outliers_IQR_AFP <- metadata_modified[metadata_modified$AFP_.ng.ml. < AFP_outliers$lower | metadata_modified$AFP_.ng.ml. > AFP_outliers$upper, ]
+outliers_IQR_log_AFP <- metadata_modified[metadata_modified$log_AFP < log_AFP_outliers$lower | metadata_modified$log_AFP > log_AFP_outliers$upper, ]
+outliers_IQR_diameter <- metadata_modified[metadata_modified$Diameter_of_tumor_.cm. < diameter_outliers$lower | metadata_modified$Diameter_of_tumor_.cm. > diameter_outliers$upper, ]
+
+# Combine Z-score and IQR outliers for AFP and Tumordiameter
+outliers_combined_AFP <- unique(c(outliers_z_AFP, rownames(outliers_IQR_AFP)))
+outliers_combined_log_AFP <- unique(c(outliers_z_log_AFP, rownames(outliers_IQR_log_AFP)))
+outliers_combined_diameter <- unique(c(outliers_z_diameter, rownames(outliers_IQR_diameter)))
+
+# Print combined outliers
+cat("Combined outliers for AFP (original):\n")
+print(metadata_modified[outliers_combined_AFP, c("AFP_.ng.ml.", "Diameter_of_tumor_.cm.")])
+
+cat("\nCombined outliers for log(AFP):\n")
+print(metadata_modified[outliers_combined_log_AFP, c("log_AFP", "Diameter_of_tumor_.cm.")])
+
+cat("\nCombined outliers for Tumordiameter:\n")
+print(metadata_modified[outliers_combined_diameter, c("AFP_.ng.ml.", "Diameter_of_tumor_.cm.")])
+
+```
+Correlation
+```{r}
+# Remove outliers using combined outlier indices for AFP
+metadata_no_outliers <- metadata_modified[!rownames(metadata_modified) %in% outliers_combined_AFP, ]
+
+# Pearson and Spearman correlation for AFP and Tumor Diameter (with outliers)
+correlation_AFP_diameter_outliers_pearson <- cor(metadata_modified$AFP_.ng.ml., metadata_modified$Diameter_of_tumor_.cm., method = "pearson")
+correlation_AFP_diameter_outliers_spearman <- cor(metadata_modified$AFP_.ng.ml., metadata_modified$Diameter_of_tumor_.cm., method = "spearman")
+
+# Pearson and Spearman correlation for AFP and Tumor Diameter (without outliers)
+correlation_AFP_diameter_pearson <- cor(metadata_no_outliers$AFP_.ng.ml., metadata_no_outliers$Diameter_of_tumor_.cm., method = "pearson")
+correlation_AFP_diameter_spearman <- cor(metadata_no_outliers$AFP_.ng.ml., metadata_no_outliers$Diameter_of_tumor_.cm., method = "spearman")
+
+# Pearson and Spearman correlation for log(AFP) and Tumor Diameter (no outliers to remove here)
+correlation_log_AFP_diameter_pearson <- cor(metadata_modified$log_AFP, metadata_modified$Diameter_of_tumor_.cm., method = "pearson")
+correlation_log_AFP_diameter_spearman <- cor(metadata_modified$log_AFP, metadata_modified$Diameter_of_tumor_.cm., method = "spearman")
+
+# Print correlations
+cat("\nPearson correlation for AFP and Tumor Diameter (without outliers removed):\n", correlation_AFP_diameter_outliers_pearson)
+cat("\nSpearman correlation for AFP and Tumor Diameter (without outliers removed):\n", correlation_AFP_diameter_outliers_spearman)
+
+cat("\nPearson correlation for AFP and Tumor Diameter (with outliers removed):\n", correlation_AFP_diameter_pearson)
+cat("\nSpearman correlation for AFP and Tumor Diameter (with outliers removed):\n", correlation_AFP_diameter_spearman)
+
+cat("\nPearson correlation for log(AFP) and Tumor Diameter (log transformation):\n", correlation_log_AFP_diameter_pearson)
+cat("\nSpearman correlation for log(AFP) and Tumor Diameter (log transformation):\n", correlation_log_AFP_diameter_spearman)
+
+# Plot the relationship between AFP (NOT filtered for outliers) and Tumor Diameter
+ggplot(metadata_modified, aes(x = AFP_.ng.ml., y = Diameter_of_tumor_.cm.)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = paste("(Not Filtered) AFP vs Tumor Diameter  (Pearson: ", round(correlation_AFP_diameter_outliers_pearson, 2), ")", 
+                     sep = ""),
+       x = "AFP (ng/ml)", y = "Tumor Diameter (cm)")
+
+# Plot the relationship between AFP (filtered for outliers) and Tumor Diameter
+ggplot(metadata_no_outliers, aes(x = AFP_.ng.ml., y = Diameter_of_tumor_.cm.)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = paste("(Filtered) AFP vs Tumor Diameter (Pearson: ", round(correlation_AFP_diameter_pearson, 2), ")", 
+                     sep = ""),
+       x = "AFP (ng/ml)", y = "Tumor Diameter (cm)")
+
+# Plot the relationship between log(AFP) (no outliers removed) and Tumor Diameter
+ggplot(metadata_modified, aes(x = log_AFP, y = Diameter_of_tumor_.cm.)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = paste("log(AFP) vs Tumor Diameter (Pearson: ", round(correlation_log_AFP_diameter_pearson, 2), ")", 
+                     sep = ""),
+       x = "log(AFP) (ng/ml)", y = "Tumor Diameter (cm)")
+
+```
+Regression analysis
+```{r}
+# Regression analysis for AFP and Tumordiameter (with outliers)
+model_AFP <- lm(Diameter_of_tumor_.cm. ~ AFP_.ng.ml., data = metadata_modified)
+cat("\nRegression analysis (AFP with outliers):\n")
+summary(model_AFP)
+
+# Residual plot for AFP and Tumordiameter (with outliers)
+ggplot(metadata_modified, aes(x = AFP_.ng.ml., y = residuals(model_AFP))) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Residuals for AFP vs Tumordiameter (with outliers)", x = "AFP (ng/ml)", y = "Residuals")
+
+# Regression analysis for AFP and Tumordiameter (without outliers)
+model_AFP_no_outliers <- lm(Diameter_of_tumor_.cm. ~ AFP_.ng.ml., data = metadata_no_outliers)
+cat("\nRegression analysis (AFP without outliers):\n")
+summary(model_AFP_no_outliers)
+
+# Residual plot for AFP and Tumordiameter (without outliers)
+ggplot(metadata_no_outliers, aes(x = AFP_.ng.ml., y = residuals(model_AFP_no_outliers))) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Residuals for AFP vs Tumordiameter (without outliers)", x = "AFP (ng/ml)", y = "Residuals")
+
+# Regression analysis for log(AFP) and Tumordiameter (no outlier removal for log(AFP) and Tumor Diameter)
+model_log_AFP <- lm(Diameter_of_tumor_.cm. ~ log_AFP, data = metadata_modified) 
+cat("\nRegression analysis (log(AFP) without outliers):\n")
+summary(model_log_AFP)
+
+# Residual plot for log(AFP) and Tumordiameter (no outliers removed for log(AFP))
+ggplot(metadata_modified, aes(x = log_AFP, y = residuals(model_log_AFP))) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Residuals for log(AFP) vs Tumordiameter (without outliers)", x = "log(AFP) (ng/ml)", y = "Residuals")
+
+```
