@@ -699,7 +699,7 @@ significant_post_hoc_kruskal <- post_hoc_kruskal_results[
 print(significant_post_hoc_kruskal)
 
 ```
-Top 10 eiwitten na Kruskal Wallis
+Top 10 proteins after Kruskal Wallis
 ```{r}
 # Dataframe to store the top 10 results per subtype after Kruskal-Wallis and post-hoc tests
 top10_per_subtype_kruskal <- data.frame(
@@ -763,7 +763,7 @@ top10_per_subtype_kruskal <- top10_per_subtype_kruskal %>%
 print(top10_per_subtype_kruskal)
 
 ```
-Visualisation na Kruskal Wallis
+Visualisation after Kruskal Wallis
 ```{r}
 # Visualisation of the top 10 proteins per subtype from Kruskal-Wallis results
 ggplot(top10_per_subtype_kruskal, aes(x = reorder(Protein_ID, -Abs_Difference), y = Abs_Difference, fill = Subtype)) +
